@@ -49,7 +49,7 @@ pub const VmmPayload = u8;
 pub const KERNEL_VMM_PAYLOAD: usize = 0;
 pub const MEMORY_BLOCK_SIZE: u32 = paging.PAGE_SIZE_4KB;
 pub const STACK_SIZE: u32 = MEMORY_BLOCK_SIZE / @sizeOf(u32);
-pub const VMM_MAPPER: vmm.Mapper(VmmPayload) = undefined;
+pub const VMM_MAPPER: vmm.Mapper(VmmPayload) = .{ .mapFn = map, .unmapFn = unmap };
 pub const BootPayload = u8;
 pub const Task = task.Task;
 
@@ -59,6 +59,9 @@ var KERNEL_PHYSADDR_END: u32 = 0x01000000;
 var KERNEL_VADDR_START: u32 = 0xC0100000;
 var KERNEL_VADDR_END: u32 = 0xC1100000;
 var KERNEL_ADDR_OFFSET: u32 = 0xC0000000;
+
+pub fn map(start: usize, end: usize, p_start: usize, p_end: usize, attrs: vmm.Attributes, allocator: *Allocator, payload: VmmPayload) !void {}
+pub fn unmap(start: usize, end: usize, payload: VmmPayload) !void {}
 
 pub fn out(port: u16, data: anytype) void {
     return mock_framework.performAction("out", void, .{ port, data });

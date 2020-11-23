@@ -6,8 +6,8 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 pub const VmmError = error{
-    /// A memory region expected to be allocated wasn't
     NotAllocated,
+    AlreadyAllocated,
 };
 
 pub const Attributes = vmm.Attributes;
@@ -35,22 +35,27 @@ pub fn VirtualMemoryManager(comptime Payload: type) type {
             return Self{};
         }
 
+        pub fn deinit(self: *Self) void {}
+
+        pub fn isSet(self: *const Self, addr: usize) !bool {
+            return true;
+        }
+
         pub fn virtToPhys(self: *const Self, virt: usize) VmmError!usize {
             return 0;
         }
 
-        pub fn alloc(self: *Self, num: u32, attrs: Attributes) std.mem.Allocator.Error!?usize {
-            return std.mem.Allocator.Error.OutOfMemory;
+        pub fn alloc(self: *Self, num: u32, addr: ?usize, attrs: Attributes) std.mem.Allocator.Error!?usize {
+            return 0;
         }
 
-        pub fn free(self: *Self, vaddr: usize) (bitmap.Bitmap(u32).BitmapError || VmmError)!void {
-            return VmmError.NotAllocated;
-        }
+        pub fn free(self: *Self, vaddr: usize) (bitmap.Bitmap(u32).BitmapError || VmmError)!void {}
 
-        pub fn copyData(self: *Self, other: *Self, data: []const u8, dest: usize, from_self: bool) (bitmap.Bitmap(usize).BitmapError || VmmError || Allocator.Error)!void {}
+        pub fn copyData(self: *Self, other: *Self, comptime from: bool, data: if (from) []const u8 else []u8, dest: usize) (bitmap.Bitmap(usize).BitmapError || VmmError || Allocator.Error)!void {}
     };
 }
 
 pub fn init(mem_profile: *const mem.MemProfile, allocator: *Allocator) Allocator.Error!*VirtualMemoryManager(arch.VmmPayload) {
-    return std.mem.Allocator.Error.OutOfMemory;
+    kernel_vmm = try VirtualMemoryManager(arch.VmmPayload).init(0, 1024, allocator, arch.VMM_MAPPER, arch.KERNEL_VMM_PAYLOAD);
+    return &kernel_vmm;
 }

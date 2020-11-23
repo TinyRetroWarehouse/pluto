@@ -13,6 +13,7 @@ const task = if (is_test) @import(mock_path ++ "task_mock.zig") else @import("ta
 const vmm = if (is_test) @import(mock_path ++ "vmm_mock.zig") else @import("vmm.zig");
 const mem = if (is_test) @import(mock_path ++ "mem_mock.zig") else @import("mem.zig");
 const fs = @import("filesystem/vfs.zig");
+const elf = @import("elf.zig");
 const Task = task.Task;
 const EntryPoint = task.EntryPoint;
 const Allocator = std.mem.Allocator;
@@ -375,32 +376,36 @@ fn rt_user_task(allocator: *Allocator, mem_profile: *const mem.MemProfile) void 
         panic(@errorReturnTrace(), "Failed to allocate user task VMM: {}\n", .{e});
     };
     task_vmm.* = vmm.VirtualMemoryManager(arch.VmmPayload).init(0, @ptrToInt(mem_profile.vaddr_start), allocator, arch.VMM_MAPPER, undefined) catch unreachable;
-    // 2. Create user task. The code will be loaded at address 0
-    var user_task = task.Task.create(0, false, task_vmm, allocator) catch |e| {
-        panic(@errorReturnTrace(), "Failed to create user task: {}\n", .{e});
-    };
     // 3. Read the user program file from the filesystem
-    const user_program_file = fs.openFile("/user_program", .NO_CREATION) catch |e| {
-        panic(@errorReturnTrace(), "Failed to open /user_program: {}\n", .{e});
+    const user_program_file = fs.openFile("/user_program.elf", .NO_CREATION) catch |e| {
+        panic(@errorReturnTrace(), "Failed to open /user_program.elf: {}\n", .{e});
     };
     defer user_program_file.close();
     var code: [1024]u8 = undefined;
     const code_len = user_program_file.read(code[0..1024]) catch |e| {
         panic(@errorReturnTrace(), "Failed to read user program file: {}\n", .{e});
     };
-    // 4. Allocate space in the vmm for the user_program
-    const code_start = task_vmm.alloc(std.mem.alignForward(code_len, vmm.BLOCK_SIZE) / vmm.BLOCK_SIZE, .{ .kernel = false, .writable = true, .cachable = true }) catch |e| {
-        panic(@errorReturnTrace(), "Failed to allocate VMM memory for user program code: {}\n", .{e});
-    } orelse panic(null, "User task VMM didn't allocate space for the user program\n", .{});
-    if (code_start != 0) panic(null, "User program start address was {} instead of 0\n", .{code_start});
-    // 5. Copy user_program code over
-    vmm.kernel_vmm.copyData(task_vmm, code[0..code_len], code_start, true) catch |e| {
-        panic(@errorReturnTrace(), "Failed to copy user code: {}\n", .{e});
+    const program_elf = elf.Elf.init(code[0..code_len], builtin.arch, allocator) catch |e| panic(@errorReturnTrace(), "Failed to load user program elf: {}\n", .{e});
+    errdefer program_elf.deinit();
+    var user_task = task.Task.createFromElf(program_elf, false, task_vmm, allocator) catch |e| {
+        panic(@errorReturnTrace(), "Failed to create user task: {}\n", .{e});
     };
     // 6. Schedule it
     scheduleTask(user_task, allocator) catch |e| {
         panic(@errorReturnTrace(), "Failed to schedule the user task: {}\n", .{e});
     };
+
+    // Only one elf section is expected to have been allocated in the vmm. Amend when more are added
+    if (task_vmm.allocations.count() != 1) {
+        panic(@errorReturnTrace(), "VMM allocated wrong number of virtual regions. Expected {} but found {}\n", .{ 1, task_vmm.allocations.count() });
+    }
+
+    // Only the minimum number of physical blocks are expected to have been allocated. Amend when more loadable elf sections are added
+    const expected_blocks = std.mem.alignForward(code_len, vmm.BLOCK_SIZE) / vmm.BLOCK_SIZE;
+    const num_blocks = task_vmm.allocations.get(program_elf.header.entry_address).?.physical.items.len;
+    if (num_blocks != expected_blocks) {
+        panic(@errorReturnTrace(), "VMM allocated wrong number of physical blocks. Expected {} but found {}\n", .{ expected_blocks, num_blocks });
+    }
 }
 
 ///

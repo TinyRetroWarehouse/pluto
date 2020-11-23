@@ -90,9 +90,13 @@ pub fn build(b: *Builder) !void {
         user_program.setBuildMode(build_mode);
         user_program.strip = true;
 
-        const copy_user_program = b.addSystemCommand(&[_][]const u8{ "objcopy", "-O", "binary", "zig-cache/user_program.o", "zig-cache/user_program" });
+        const user_program_format = switch (target.getCpuArch()) {
+            .i386 => "elf32-i386",
+            else => unreachable,
+        };
+        const copy_user_program = b.addSystemCommand(&[_][]const u8{ "objcopy", "-O", user_program_format, "zig-cache/user_program.o", "zig-cache/user_program.elf" });
         copy_user_program.step.dependOn(&user_program.step);
-        try ramdisk_files_al.append("zig-cache/user_program");
+        try ramdisk_files_al.append("zig-cache/user_program.elf");
         exec.step.dependOn(&copy_user_program.step);
     }
 

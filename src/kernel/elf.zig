@@ -278,17 +278,11 @@ pub const SectionType = enum(u32) {
     ///
     pub fn hasData(self: @This()) bool {
         return switch (self) {
-            .Unused, .ProgramData, .ProgramSpace, .Reserved => false,
+            .Unused, .ProgramSpace, .Reserved => false,
             else => true,
         };
     }
 };
-
-comptime {
-    std.debug.assert(@sizeOf(SectionHeader) == if (@bitSizeOf(usize) == 32) 0x28 else 0x40);
-    std.debug.assert(@sizeOf(Header) == if (@bitSizeOf(usize) == 32) 0x32 else 0x40);
-    std.debug.assert(@sizeOf(ProgramHeader) == if (@bitSizeOf(usize) == 32) 0x20 else 0x38);
-}
 
 /// The section is writable
 pub const SECTION_WRITABLE = 1;
@@ -469,12 +463,13 @@ fn testSetSection(data: []u8, header: SectionHeader, idx: usize) void {
     std.mem.copy(u8, data[offset .. offset + @sizeOf(SectionHeader)], @ptrCast([*]const u8, &header)[0..@sizeOf(SectionHeader)]);
 }
 
-fn testInitData(section_name: []const u8, string_section_name: []const u8, file_type: Type, entry_address: usize, flags: u32, section_flags: u32, strings_flags: u32, section_address: usize, strings_address: usize) []u8 {
+pub fn testInitData(section_name: []const u8, string_section_name: []const u8, file_type: Type, entry_address: usize, flags: u32, section_flags: u32, strings_flags: u32, section_address: usize, strings_address: usize) []u8 {
     const is_32_bit = @bitSizeOf(usize) == 32;
     const header_size = if (is_32_bit) 0x34 else 0x40;
     const p_header_size = if (is_32_bit) 0x20 else 0x38;
     const s_header_size = if (is_32_bit) 0x28 else 0x40;
-    const data_size = header_size + s_header_size + s_header_size + section_name.len + 1 + string_section_name.len + 1;
+    const section_size = 1024;
+    const data_size = header_size + s_header_size + s_header_size + section_name.len + 1 + string_section_name.len + 1 + section_size;
     var data = testing.allocator.alloc(u8, data_size) catch unreachable;
 
     var header = Header{
@@ -495,7 +490,11 @@ fn testInitData(section_name: []const u8, string_section_name: []const u8, file_
         .padding2 = 0,
         .padding3 = 0,
         .file_type = file_type,
-        .architecture = .AMD_64,
+        .architecture = switch (builtin.arch) {
+            .i386 => .x86,
+            .x86_64 => .AMD_64,
+            else => unreachable,
+        },
         .version2 = 1,
         .entry_address = entry_address,
         .program_header_offset = undefined,
@@ -517,8 +516,8 @@ fn testInitData(section_name: []const u8, string_section_name: []const u8, file_
         .section_type = .ProgramData,
         .flags = section_flags,
         .virtual_address = section_address,
-        .offset = 0,
-        .size = 0,
+        .offset = data_offset + s_header_size + s_header_size,
+        .size = section_size,
         .linked_section_idx = undefined,
         .info = undefined,
         .alignment = 1,
@@ -532,7 +531,7 @@ fn testInitData(section_name: []const u8, string_section_name: []const u8, file_
         .section_type = .StringTable,
         .flags = strings_flags,
         .virtual_address = strings_address,
-        .offset = data_offset + s_header_size,
+        .offset = data_offset + s_header_size + section_size,
         .size = section_name.len + 1 + string_section_name.len + 1,
         .linked_section_idx = undefined,
         .info = undefined,
@@ -541,6 +540,9 @@ fn testInitData(section_name: []const u8, string_section_name: []const u8, file_
     };
     testSetSection(data, string_section_header, 1);
     data_offset += s_header_size;
+
+    std.mem.copy(u8, data[data_offset .. data_offset + section_size], &[_]u8{0} ** section_size);
+    data_offset += section_size;
 
     std.mem.copy(u8, data[data_offset .. data_offset + section_name.len], section_name);
     data_offset += section_name.len;
@@ -558,16 +560,20 @@ test "init" {
     const section_name = "some_section";
     const string_section_name = "strings";
     const is_32_bit = @bitSizeOf(usize) == 32;
-    var data = testInitData(section_name, string_section_name, .Executable, 0, undefined, 123, 789, 456, 012);
+    var data = testInitData(section_name, string_section_name, .Executable, 0, 0, 123, 789, 456, 012);
     defer testing.allocator.free(data);
     const elf = try Elf.init(data, builtin.arch, testing.allocator);
     defer elf.deinit();
 
     testing.expectEqual(elf.header.data_size, if (is_32_bit) .ThirtyTwoBit else .SixtyFourBit);
     testing.expectEqual(elf.header.file_type, .Executable);
-    testing.expectEqual(elf.header.architecture, .AMD_64);
+    testing.expectEqual(elf.header.architecture, switch (builtin.arch) {
+        .i386 => .x86,
+        .x86_64 => .AMD_64,
+        else => unreachable,
+    });
     testing.expectEqual(elf.header.entry_address, 0);
-    testing.expectEqual(elf.header.flags, undefined);
+    testing.expectEqual(elf.header.flags, 0);
     testing.expectEqual(elf.header.section_name_index, 1);
 
     testing.expectEqual(elf.program_headers.len, 0);
@@ -586,7 +592,7 @@ test "init" {
     testing.expectEqual(@as(usize, 012), section_two.virtual_address);
 
     testing.expectEqual(@as(usize, 2), elf.section_data.len);
-    testing.expectEqual(@as(?[]const u8, null), elf.section_data[0]);
+    testing.expectEqual(elf.section_headers[0].size, elf.section_data[0].?.len);
     for ("some_section" ++ [_]u8{0} ++ "strings" ++ [_]u8{0}) |char, i| {
         testing.expectEqual(char, elf.section_data[1].?[i]);
     }
@@ -678,7 +684,7 @@ test "toArch" {
 }
 
 test "hasData" {
-    const no_data = [_]SectionType{ .Unused, .ProgramSpace, .Reserved, .ProgramData };
+    const no_data = [_]SectionType{ .Unused, .ProgramSpace, .Reserved };
 
     inline for (@typeInfo(SectionType).Enum.fields) |field| {
         const sec_type = @field(SectionType, field.name);
